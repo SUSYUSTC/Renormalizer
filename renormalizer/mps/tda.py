@@ -19,7 +19,7 @@ class TDA(object):
     r""" Tamm–Dancoff approximation (or called CIS) to calculate the excited
     states based on MPS. TDA use the first order tangent space to do excitation.
     The implementation is similar to J. Chem. Phys. 140, 024108 (2014).
-    
+
     Parameters
     ----------
     model: renormalizer.model.model
@@ -41,7 +41,7 @@ class TDA(object):
     """
 
     def __init__(self, model, hmpo, mps, nroots=1, algo=None):
-               
+
         self.model = model
         self.hmpo = hmpo
         self.psi0 = mps
@@ -59,7 +59,7 @@ class TDA(object):
         # wavefunction: [mps_l_cano, mps_r_cano, tangent_u, tda_coeff_list]
         self.wfn = None
         self.configs = defaultdict(list)
-    
+
     def kernel(self, restart=False, include_psi0=False):
         r"""calculate the roots
 
@@ -92,16 +92,16 @@ class TDA(object):
             mps = self.mps.ensure_right_canonical().canonicalise().normalize("mps_and_coeff").canonicalise()
             logger.debug(f"reference mps shape, {mps}")
             mps_r_cano = mps.copy()
-            assert mps.to_right 
-            
+            assert mps.to_right
+
             tangent_u = []
-    
+
             for ims in range(len(mps)):
-                
+
                 shape = list(mps[ims].shape)
                 u, s, vt = scipy.linalg.svd(mps[ims].l_combine(), full_matrices=True)
                 rank = len(s)
-                if include_psi0 and ims == site_num-1: 
+                if include_psi0 and ims == site_num-1:
                     tangent_u.append(u.reshape(shape[:-1]+[-1]))
                 else:
                     if rank < u.shape[1]:
@@ -110,14 +110,14 @@ class TDA(object):
                         tangent_u.append(None)  # the tangent space is None
 
                 mps[ims] = u[:,:rank].reshape(shape[:-1]+[-1])
-                
+
                 vt = xp.einsum("i, ij -> ij", asxp(s), asxp(vt))
                 if ims == site_num-1:
                     assert vt.size == 1 and xp.allclose(vt, 1)
                 else:
                     mps[ims+1] = asnumpy(tensordot(vt, mps[ims+1], ([-1],[0])))
-                
-            mps_l_cano = mps.copy() 
+
+            mps_l_cano = mps.copy()
             mps_l_cano.to_right = False
             mps_l_cano.qnidx = site_num-1
 
@@ -132,7 +132,7 @@ class TDA(object):
             cguess = np.stack(cguess, axis=1)
             #logger.debug(f"cguess.shape: {cguess.shape}")
 
-        xshape = [] 
+        xshape = []
         xsize = 0
         for ims in range(site_num):
             if tangent_u[ims] is None:
@@ -140,17 +140,17 @@ class TDA(object):
             else:
                 if ims == site_num-1:
                     xshape.append((tangent_u[ims].shape[-1], 1))
-                else:    
+                else:
                     xshape.append((tangent_u[ims].shape[-1], mps_r_cano[ims+1].shape[0]))
                 xsize += np.prod(xshape[-1])
-        
+
         logger.debug(f"DMRG-TDA H dimension: {xsize}")
-        
+
         if USE_GPU:
             oe_backend = "cupy"
         else:
             oe_backend = "numpy"
-        
+
         mps_tangent = mps_r_cano.copy()
         environ = Environ(mps_tangent, mpo, "R")
         hdiag = []
@@ -166,13 +166,13 @@ class TDA(object):
             if tangent_u[ims] is not None:
                 u = asxp(tangent_u[ims])
                 tmp = oe.contract("abc, ded, bghe, agl, chl -> ld", ltensor, rtensor,
-                        asxp(mpo[ims]), u, u, backend=oe_backend)   
+                        asxp(mpo[ims]), u, u, backend=oe_backend)
                 hdiag.append(asnumpy(tmp))
             mps_tangent[ims] = mps_l_cano[ims]
         hdiag = np.concatenate(hdiag, axis=None)
-    
+
         count = 0
-        
+
         # recover the vector-like x back to the ndarray tda_coeff
         def reshape_x(x):
             tda_coeff = []
@@ -184,33 +184,33 @@ class TDA(object):
                     size = np.prod(shape)
                     tda_coeff.append(x[offset:size+offset].reshape(shape))
                     offset += size
-            
+
             assert offset == xsize
             return tda_coeff
-            
+
         def hop(x):
             # H*X
             nonlocal count
             count += 1
-            
+
             assert len(x) == xsize
             tda_coeff = reshape_x(x)
-    
+
             res = [np.zeros_like(coeff) if coeff is not None else None for coeff in tda_coeff]
-            
+
             # fix ket and sweep bra and accumulate into res
             for ims in range(site_num):
                 if tda_coeff[ims] is None:
                     assert tangent_u[ims] is None
                     continue
-                
+
                 # mix-canonical mps
                 mps_tangent = merge(mps_l_cano, mps_r_cano, ims+1)
                 mps_tangent[ims] = tensordot(tangent_u[ims], tda_coeff[ims], (-1, 0))
-                
+
                 mps_tangent_conj = mps_r_cano.copy()
                 environ = Environ(mps_tangent, mpo, "R", mps_conj=mps_tangent_conj)
-                
+
                 for ims_conj in range(site_num):
                     ltensor = environ.GetLR(
                         "L", ims_conj-1, mps_tangent, mpo, itensor=None,
@@ -228,7 +228,7 @@ class TDA(object):
                         # O-b-O-f-O
                         #     e
                         # S-c   k-S
-    
+
                         path = [
                             ([0, 1], "abc, cek -> abek"),
                             ([2, 0], "abek, bdef -> akdf"),
@@ -240,14 +240,14 @@ class TDA(object):
                         )
                         res[ims_conj] += asnumpy(tensordot(tangent_u[ims_conj], out,
                             ([0,1], [0,1])))
-                    
-                    # mps_conj combine 
-                    mps_tangent_conj[ims_conj] = mps_l_cano[ims_conj]    
-            
+
+                    # mps_conj combine
+                    mps_tangent_conj[ims_conj] = mps_l_cano[ims_conj]
+
             res = [mat for mat in res if mat is not None]
-    
+
             return np.concatenate(res, axis=None)
-        
+
         if algo == "direct":
             Hmat = np.zeros([xsize, xsize])
             for ims in range(site_num):
@@ -265,50 +265,84 @@ class TDA(object):
                     environ = Environ(mps_tangent, mpo, mps_conj=mps_tangent_conj)
                     ltensor = environ.GetLR("L", ims-1, mps_tangent, mpo, method="Enviro")
                     rtensor = environ.GetLR("R", ims_conj+1, mps_tangent, mpo, method="Enviro")
+                    logger.info(f'{ims}, {ims_conj}')
                     if ims == ims_conj:
                         """
-                        S-a   g i       
+                        S-a   g i
                             e
-                        O-b-O-d   
-                            f 
+                        O-b-O-d
+                            f
                         S-c-  h j
 
                         """
-                        tmp = oe.contract("abc, befd, cfh, aeg, idj-> gihj",
-                                ltensor, asxp(mpo[ims]), asxp(tangent_u[ims]),
-                                asxp(tangent_u[ims_conj]), rtensor, backend=oe_backend)
-                    else:  
-                        tmp = oe.contract("abc, befd, cfh, aeg -> gdh",
-                                ltensor, asxp(mpo[ims]), asxp(tangent_u[ims]),
-                                asxp(mps_tangent_conj[ims]), backend=oe_backend)
+                        a, b, c = ltensor.shape
+                        b, e, f, d = mpo[ims].shape
+                        c, f, h = tangent_u[ims].shape
+                        a, e, g = tangent_u[ims_conj].shape
+                        i, d, j = rtensor.shape
+                        tmpshape = (g, i, h, j)
+                        logger.info(f'{tmpshape} {np.log10(np.prod(tmpshape))}')
+                        tmp = np.random.random(tmpshape)
+                        #tmp = oe.contract("abc, befd, cfh, aeg, idj-> gihj",
+                        #        ltensor, asxp(mpo[ims]), asxp(tangent_u[ims]),
+                        #        asxp(tangent_u[ims_conj]), rtensor, backend=oe_backend)
+                    else:
+                        a, b, c = ltensor.shape
+                        b, e, f, d = mpo[ims].shape
+                        c, f, h = tangent_u[ims].shape
+                        a, e, g = mps_tangent_conj[ims].shape
+                        tmpshape = (g, d, h)
+                        logger.info(f'{tmpshape} {np.log10(np.prod(tmpshape))}')
+                        tmp = np.random.random(tmpshape)
+                        #tmp = oe.contract("abc, befd, cfh, aeg -> gdh",
+                        #        ltensor, asxp(mpo[ims]), asxp(tangent_u[ims]),
+                        #        asxp(mps_tangent_conj[ims]), backend=oe_backend)
                         if ims+1 != ims_conj:
                             tmp2 = mps_tangent_conj[ims+1]
                         else:
                             tmp2 = tangent_u[ims+1]
 
-                        tmp = oe.contract("abc, befd, xfh, aeg -> cxgdh",
-                                tmp, asxp(mpo[ims+1]), asxp(mps_tangent[ims+1]), asxp(tmp2),
-                                backend=oe_backend)
+                        a, b, c = tmp.shape
+                        b, e, f, d = mpo[ims + 1].shape
+                        x, f, h = mps_tangent[ims + 1].shape
+                        a, e, g = tmp2.shape
+                        tmpshape = (c, x, g, d, h)
+                        logger.info(f'{tmpshape} {np.log10(np.prod(tmpshape))}')
+                        tmp = np.random.random(tmpshape)
+                        #tmp = oe.contract("abc, befd, xfh, aeg -> cxgdh",
+                        #        tmp, asxp(mpo[ims+1]), asxp(mps_tangent[ims+1]), asxp(tmp2),
+                        #        backend=oe_backend)
 
                         for inter in range(ims+2, ims_conj+1):
                             if inter != ims_conj:
                                 tmp2 = mps_tangent_conj[inter]
                             else:
                                 tmp2 = tangent_u[ims_conj]
+                            logger.info(f'inter {inter}')
 
-                            tmp = oe.contract("xyabc, befd, cfh, aeg -> xygdh",
-                                    tmp, asxp(mpo[inter]),
-                                    asxp(mps_tangent[inter]), 
-                                    asxp(tmp2),
-                                    backend=oe_backend)
+                            x, y, a, b, c = tmp.shape
+                            b, e, f, d = mpo[inter].shape
+                            c, f, h = mps_tangent[inter].shape
+                            a, e, g = tmp2.shape
+                            tmpshape = (x, y, g, d, h)
+                            logger.info(f'{tmpshape} {np.log10(np.prod(tmpshape))}')
+                            tmp = np.random.random(tmpshape)
+                            #tmp = oe.contract("xyabc, befd, cfh, aeg -> xygdh",
+                            #        tmp, asxp(mpo[inter]),
+                            #        asxp(mps_tangent[inter]),
+                            #        asxp(tmp2),
+                            #        backend=oe_backend)
 
-                        tmp = oe.contract("xyabc, zbc->azxy", tmp, rtensor, backend=oe_backend)
+                        x, y, a, b, c = tmp.shape
+                        z, b, c = rtensor.shape
+                        tmp = np.random.random((a, z, x, y))
+                        #tmp = oe.contract("xyabc, zbc->azxy", tmp, rtensor, backend=oe_backend)
                     shape = (np.prod(tmp.shape[:2]), np.prod(tmp.shape[2:]))
                     tmp = asnumpy(tmp.reshape(shape))
                     Hmat[pos1_conj:pos2_conj, pos1:pos2] = tmp
                     if ims != ims_conj:
                         Hmat[pos1:pos2, pos1_conj:pos2_conj] = tmp.T
-            
+
             logger.info("Setting up Hamiltonian is complete")
             e, c = scipy.linalg.eigh(Hmat)
             self.nroots = nroots = xsize
@@ -319,7 +353,7 @@ class TDA(object):
             else:
                 cguess = [np.random.random(xsize) - 0.5]
             precond = lambda x, e, *args: x / (hdiag - e + 1e-4)
-                 
+
             e, c = davidson(
                 hop, cguess, precond, max_cycle=100,
                 nroots=nroots, max_memory=64000
@@ -348,7 +382,7 @@ class TDA(object):
             tmp = hdiag-e0
             tmp[np.where(np.abs(tmp)<1e-6)] = 1e-6
 
-            def precond(x): 
+            def precond(x):
                 if x.ndim == 1:
                     return np.einsum("i, i -> i", 1/tmp, x)
                 elif x.ndim ==2:
@@ -359,10 +393,10 @@ class TDA(object):
                     matvec=multi_hop, matmat=multi_hop)
             M = scipy.sparse.linalg.LinearOperator((xsize,xsize),
                     matvec=precond, matmat=precond)
-            e, c, stats = primme.eigsh(A, k=min(nroots,xsize), which="SA", 
+            e, c, stats = primme.eigsh(A, k=min(nroots,xsize), which="SA",
                             v0=cguess,
                             OPinv=M,
-                            method="PRIMME_DYNAMIC", 
+                            method="PRIMME_DYNAMIC",
                             tol=1e-6,
                             return_stats=True,
                             return_history=False)
@@ -371,18 +405,18 @@ class TDA(object):
             assert False
 
         logger.debug(f"H*C times: {count}")
-        
+
         tda_coeff_list = []
         for iroot in range(nroots):
-            tda_coeff_list.append(reshape_x(c[:,iroot])) 
-        
+            tda_coeff_list.append(reshape_x(c[:,iroot]))
+
         self.e = np.array(e)
         self.wfn = [mps_l_cano, mps_r_cano, tangent_u, tda_coeff_list]
         return self.e
 
     def dump_wfn(self):
         r""" Dump wavefunction for restart and analysis
-        
+
         Note
         ----
         mps_l_cano.npz: left-canonical form of initial mps
@@ -390,13 +424,13 @@ class TDA(object):
         tangent_u: the tangent space u of the mixed-canonical mps
         tda_coeff_{iroot}.npz: the tda_coeff of the ith root.
         """
-        
+
         mps_l_cano, mps_r_cano, tangent_u, tda_coeff_list = self.wfn
-        
+
         # store mps_l_cano mps_r_cano
         mps_l_cano.dump("mps_l_cano.npz")
         mps_r_cano.dump("mps_r_cano.npz")
-        
+
         # store tangent_u
         tangent_u_dict = {f"{i}":mat for i, mat in enumerate(tangent_u) if mat is
                 not None}
@@ -412,7 +446,7 @@ class TDA(object):
                         in range(len(tda_coeff_list))]
                 tda_coeff_dict[str(ims)] = np.array(tda_single_site_coeff_list)
         np.savez(f"tda_coeff.npz", **tda_coeff_dict)
- 
+
 
     def load_wfn(self, model):
         r"""Load tda wavefunction
@@ -424,9 +458,9 @@ class TDA(object):
                 else None for i in range(mps_l_cano.site_num)]
         tda_coeff_list = []
         tda_coeff_dict = np.load(f"tda_coeff.npz")
-        
+
         nroots = tda_coeff_dict[list(tda_coeff_dict.keys())[0]].shape[0]
-        tda_coeff_list = [[] for iroot in range(nroots)] 
+        tda_coeff_list = [[] for iroot in range(nroots)]
         for ims in range(mps_l_cano.site_num):
             if str(ims) in tda_coeff_dict.keys():
                 tda_single_site_coeff = tda_coeff_dict[str(ims)]
@@ -435,7 +469,7 @@ class TDA(object):
             else:
                 for iroot in range(nroots):
                     tda_coeff_list[iroot].append(None)
-                    
+
         self.wfn = [mps_l_cano, mps_r_cano, tangent_u, tda_coeff_list]
         logger.info("Load tda wavefunction is complete.")
 
@@ -451,13 +485,13 @@ class TDA(object):
             stateindex = [stateindex]
         else:
             assert isinstance(stateindex, list)
-        
+
         if mps is None:
             mps = self.psi0
         mps_conj = mps.conj()
 
         mps_l_cano, mps_r_cano, tangent_u, tda_coeff_list = self.wfn
-        
+
         trans_tot = []
         for iroot in range(self.nroots):
             tda_coeff = tda_coeff_list[iroot]
@@ -467,8 +501,8 @@ class TDA(object):
                 if tangent_u[ims] is None:
                     assert tda_coeff[ims] is None
                     continue
-                mps_tangent = merge(mps_l_cano, mps_r_cano, ims+1) 
-                mps_tangent[ims] = tensordot(tangent_u[ims], tda_coeff[ims],[-1,0]) 
+                mps_tangent = merge(mps_l_cano, mps_r_cano, ims+1)
+                mps_tangent[ims] = tensordot(tangent_u[ims], tda_coeff[ims],[-1,0])
                 trans += mps_tangent.expectation(mpo, mps_conj)
             trans_tot.append(trans)
         return trans_tot
@@ -477,7 +511,7 @@ class TDA(object):
     def analysis_1ordm(self):
         r""" calculate one-orbital reduced density matrix of each tda root
         """
-        
+
         mps_l_cano, mps_r_cano, tangent_u, tda_coeff_list = self.wfn
         for iroot in range(self.nroots):
             tda_coeff = tda_coeff_list[iroot]
@@ -486,22 +520,22 @@ class TDA(object):
                 if tangent_u[ims] is None:
                     assert tda_coeff[ims] is None
                     continue
-                mps_tangent = merge(mps_l_cano, mps_r_cano, ims+1) 
-                mps_tangent[ims] = tensordot(tangent_u[ims], tda_coeff[ims],[-1,0]) 
+                mps_tangent = merge(mps_l_cano, mps_r_cano, ims+1)
+                mps_tangent[ims] = tensordot(tangent_u[ims], tda_coeff[ims],[-1,0])
                 rdm_increment = mps_tangent.calc_1ordm()
 
                 if rdm is None:
                     rdm = rdm_increment
                 else:
                     rdm = [mat1+mat2 for mat1, mat2 in zip(rdm, rdm_increment)]
-            
+
             dominant_config = {}
             for isite, mat in enumerate(rdm):
                 quanta = np.argmax(np.diag(mat))
                 dominant_config[isite] = (quanta, np.diag(mat)[quanta])
             logger.info(f"root: {iroot}, config: {dominant_config}")
-            
-    
+
+
     def analysis_dominant_config(self, thresh=0.8, alias=None, tda_m_trunc=20,
             return_compressed_mps=False, nroots=None):
         r""" analyze the dominant configuration of each tda root.
@@ -510,21 +544,21 @@ class TDA(object):
             Then, the configuration is subtracted from the tda wavefunction and
             redo the first step to get the second largest configuration. The
             two steps continue until the thresh is achieved.
-        
+
         Parameters
         ----------
         thresh: float, optional
-            the threshold to stop the analysis procedure of each root. 
+            the threshold to stop the analysis procedure of each root.
             :math:`\sum_i |c_i|^2 > thresh`. Default is 0.8.
         alias: dict, optional
             The alias of each site. For example, ``alias={0:"v_0", 1:"v_2",
-            2:"v_1"}``. Default is `None`. 
+            2:"v_1"}``. Default is `None`.
         tda_m_trunc: int, optional
             the ``m`` to compress a tda wavefunction. Default is 20.
         return_compressed_mps: bool, optional
             If ``True``, return the tda excited state as a single compressed
             mps. Default is `False`.
-        
+
         Returns
         -------
         configs: dict
@@ -533,7 +567,7 @@ class TDA(object):
             config_name1, ci_coeff1),...], 1:...}``
         compressed_mps: List[renormalizer.mps.Mps]
             see the description in ``return_compressed_mps``.
-        
+
         Note
         ----
         The compressed_mps is an approximation of the tda wavefunction with
@@ -546,7 +580,7 @@ class TDA(object):
 
         if alias is not None:
             assert len(alias) == mps_l_cano.site_num
-        
+
         compressed_mps = []
         for iroot in range(nroots):
             logger.info(f"iroot: {iroot}")
@@ -559,18 +593,18 @@ class TDA(object):
                     assert tda_coeff[ims] is None
                     continue
                 weight.append(np.sum(tda_coeff[ims]**2))
-                mps_tangent = merge(mps_l_cano, mps_r_cano, ims+1) 
+                mps_tangent = merge(mps_l_cano, mps_r_cano, ims+1)
                 mps_tangent[ims] = asnumpy(tensordot(tangent_u[ims],
                     tda_coeff[ims],[-1,0]))
                 mps_tangent_list.append(mps_tangent)
-            
+
             assert np.allclose(np.sum(weight), 1)
             # sort the mps_tangent from large weight to small weight
             mps_tangent_list = [mps_tangent_list[i] for i in np.argsort(weight,axis=None)[::-1]]
 
             coeff_square_sum = 0
             mps_delete = None
-            
+
             config_visited = []
             while coeff_square_sum < thresh:
                 if mps_delete is None:
@@ -581,20 +615,20 @@ class TDA(object):
                     mps_rank1 = compressed_sum([mps_delete] + mps_tangent_list,
                             batchsize=5, temp_m_trunc=tda_m_trunc)
                 if coeff_square_sum == 0 and return_compressed_mps:
-                    compressed_mps.append(mps_rank1.copy())       
+                    compressed_mps.append(mps_rank1.copy())
                 mps_rank1 = mps_rank1.canonicalise().compress(temp_m_trunc=1)
-                
+
                 # get config with the largest coeff
                 config = []
                 for ims, ms in enumerate(mps_rank1):
                     ms = ms.array.flatten()**2
                     quanta = int(np.argmax(ms))
                     config.append(quanta)
-               
+
                 # check if the config has been visited
                 if config in config_visited:
                     break
-                
+
                 config_visited.append(config)
 
                 ci_coeff_list = []
@@ -605,7 +639,7 @@ class TDA(object):
                     ci_coeff_list.append(float(sentinel[0,0]))
                 ci_coeff = np.sum(ci_coeff_list)
                 coeff_square_sum += ci_coeff**2
-                
+
                 if alias is not None:
                     config_name = [f"{quanta}"+f"{alias[isite]}" for isite, quanta
                             in enumerate(config) if quanta != 0]
@@ -627,13 +661,13 @@ class TDA(object):
                     mps_delete = mps_delete + mps_delete_increment
 
             logger.info(f"coeff_square_sum: {coeff_square_sum}")
-        
+
         return self.configs, compressed_mps
-        
+
 def merge(mpsl, mpsr, idx):
     """ merge two mps (mpsl, mpsr) at dix
         idx belongs mpsr, the other attributes are the same aas mpsl
-    """ 
+    """
     mps = mpsl.copy()
     for imps in range(idx, mpsr.site_num):
         mps[imps] = mpsr[imps]
