@@ -282,7 +282,7 @@ class TDA(object):
                         i, d, j = rtensor.shape
                         tmpshape = (g, i, h, j)
                         logger.info(f'{tmpshape} {np.log10(np.prod(tmpshape))}')
-                        tmp = np.random.random(tmpshape)
+                        tmp = xp.random.random(tmpshape)
                         #tmp = oe.contract("abc, befd, cfh, aeg, idj-> gihj",
                         #        ltensor, asxp(mpo[ims]), asxp(tangent_u[ims]),
                         #        asxp(tangent_u[ims_conj]), rtensor, backend=oe_backend)
@@ -293,7 +293,7 @@ class TDA(object):
                         a, e, g = mps_tangent_conj[ims].shape
                         tmpshape = (g, d, h)
                         logger.info(f'{tmpshape} {np.log10(np.prod(tmpshape))}')
-                        tmp = np.random.random(tmpshape)
+                        tmp = xp.random.random(tmpshape)
                         #tmp = oe.contract("abc, befd, cfh, aeg -> gdh",
                         #        ltensor, asxp(mpo[ims]), asxp(tangent_u[ims]),
                         #        asxp(mps_tangent_conj[ims]), backend=oe_backend)
@@ -308,7 +308,7 @@ class TDA(object):
                         a, e, g = tmp2.shape
                         tmpshape = (c, x, g, d, h)
                         logger.info(f'{tmpshape} {np.log10(np.prod(tmpshape))}')
-                        tmp = np.random.random(tmpshape)
+                        tmp = xp.random.random(tmpshape)
                         #tmp = oe.contract("abc, befd, xfh, aeg -> cxgdh",
                         #        tmp, asxp(mpo[ims+1]), asxp(mps_tangent[ims+1]), asxp(tmp2),
                         #        backend=oe_backend)
@@ -326,7 +326,7 @@ class TDA(object):
                             a, e, g = tmp2.shape
                             tmpshape = (x, y, g, d, h)
                             logger.info(f'{tmpshape} {np.log10(np.prod(tmpshape))}')
-                            tmp = np.random.random(tmpshape)
+                            tmp = xp.random.random(tmpshape)
                             #tmp = oe.contract("xyabc, befd, cfh, aeg -> xygdh",
                             #        tmp, asxp(mpo[inter]),
                             #        asxp(mps_tangent[inter]),
@@ -335,7 +335,9 @@ class TDA(object):
 
                         x, y, a, b, c = tmp.shape
                         z, b, c = rtensor.shape
-                        tmp = np.random.random((a, z, x, y))
+                        tmpshape = (a, z, x, y)
+                        logger.info(f'{tmpshape} {np.log10(np.prod(tmpshape))}')
+                        tmp = xp.random.random(tmpshape)
                         #tmp = oe.contract("xyabc, zbc->azxy", tmp, rtensor, backend=oe_backend)
                     shape = (np.prod(tmp.shape[:2]), np.prod(tmp.shape[2:]))
                     tmp = asnumpy(tmp.reshape(shape))
