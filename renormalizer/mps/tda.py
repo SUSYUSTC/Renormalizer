@@ -14,8 +14,7 @@ from renormalizer.mps.lib import Environ, compressed_sum
 from renormalizer.lib import davidson
 
 logger = logging.getLogger(__name__)
-print_size_only = False
-use_jax = False
+use_jax = True
 
 
 class TDA(object):
@@ -154,9 +153,13 @@ class TDA(object):
         if USE_GPU:
             oe_backend = "cupy"
         else:
-            oe_backend = "numpy"
-        if use_jax:
-            oe_backend = 'jax'
+            if use_jax:
+                oe_backend = "jax"
+            else:
+                oe_backend = "numpy"
+
+        def contract(*args):
+            return xp.asarray(oe.contract(*args, backend=oe_backend))
 
         mps_tangent = mps_r_cano.copy()
         environ = Environ(mps_tangent, mpo, "R")
@@ -172,8 +175,8 @@ class TDA(object):
             )
             if tangent_u[ims] is not None:
                 u = asxp(tangent_u[ims])
-                tmp = oe.contract("abc, ded, bghe, agl, chl -> ld", ltensor, rtensor,
-                        asxp(mpo[ims]), u, u, backend=oe_backend)
+                tmp = contract("abc, ded, bghe, agl, chl -> ld", ltensor, rtensor,
+                        asxp(mpo[ims]), u, u)
                 hdiag.append(asnumpy(tmp))
             mps_tangent[ims] = mps_l_cano[ims]
         hdiag = np.concatenate(hdiag, axis=None)
@@ -292,13 +295,12 @@ class TDA(object):
 
                             """
                             inter = ims
-                            tmp = oe.contract("abc, befd, cfh, aeg, idj-> gihj",
-                                             tmp,
-                                             asxp(mpo[inter]),
-                                             asxp(tangent_u[inter]),
-                                             asxp(tangent_u[inter]),
-                                             rtensor,
-                                             backend=oe_backend)
+                            tmp = contract("abc, befd, cfh, aeg, idj-> gihj",
+                                           tmp,
+                                           asxp(mpo[inter]),
+                                           asxp(tangent_u[inter]),
+                                           asxp(tangent_u[inter]),
+                                           rtensor)
                         else:
                             def update_tmp(tmp, inter, pattern, tangent):
                                 nonlocal tmp_cache
@@ -327,10 +329,7 @@ class TDA(object):
                                     size_total = np.prod([shapes_dict[letter] for letter in shapes_dict])
                                     logger.info(f'inter {inter}')
                                     logger.info(f'{shape_output} {np.log10(size_output)} {np.log10(size_total)}')
-                                    #if print_size_only:
-                                    #    tmp = xp.random.random(shape_output)
-                                    #else:
-                                    tmp = oe.contract(pattern, *tensors, backend=oe_backend)
+                                    tmp = contract(pattern, *tensors)
                                     logger.info(xp.sum(tmp))
                                 if inter == ims_conj - 1:
                                     tmp_cache = (inter, tmp)
@@ -345,7 +344,7 @@ class TDA(object):
                             for inter in range(ims + 2, ims_conj + 1):
                                 tmp = update_tmp(tmp, inter, "xyabc, befd, cfh, aeg -> xygdh", mps_tangent)
 
-                            tmp = oe.contract("xyabc, zbc->azxy", tmp, rtensor, backend=oe_backend)
+                            tmp = contract("xyabc, zbc->azxy", tmp, rtensor)
                         shape = (np.prod(tmp.shape[:2]), np.prod(tmp.shape[2:]))
                         tmp = asnumpy(tmp.reshape(shape))
                         if self.do_cache:
@@ -356,7 +355,16 @@ class TDA(object):
 
             logger.info("Setting up Hamiltonian is complete")
             self.Hmat = Hmat
-            e, c = scipy.linalg.eigh(Hmat)
+            if USE_GPU:
+                e, c = xp.linalg.eigh(xp.asarray(Hmat))
+                e = e.get()
+                c = c.get()
+            else:
+                if use_jax:
+                    import jax
+                    e, c = jax.scipy.linalg.eigh(Hmat)
+                else:
+                    e, c = xp.linalg.eigh(Hmat)
             self.nroots = nroots = xsize
 
         elif algo == "davidson":
@@ -419,8 +427,7 @@ class TDA(object):
         logger.debug(f"H*C times: {count}")
 
         tda_coeff_list = []
-        import tqdm
-        for iroot in tqdm.tqdm(range(nroots)):
+        for iroot in range(nroots):
             tda_coeff_list.append(reshape_x(c[:,iroot]))
 
         self.e = np.array(e)
