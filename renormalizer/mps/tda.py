@@ -426,7 +426,8 @@ class TDA(object):
         logger.debug(f"H*C times: {count}")
 
         tda_coeff_list = []
-        for iroot in range(nroots):
+        import tqdm
+        for iroot in tqdm.tqdm(range(nroots)):
             tda_coeff_list.append(reshape_x(c[:,iroot]))
 
         self.e = np.array(e)
