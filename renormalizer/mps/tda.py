@@ -260,18 +260,18 @@ class TDA(object):
                 for ims_conj in range(ims, site_num):
                     if tangent_u[ims_conj] is None:
                         continue
+                    pos1_conj = np.sum([np.prod(xshape[i]) for i in range(ims_conj)], dtype=np.int32)
+                    pos2_conj = np.sum([np.prod(xshape[i]) for i in range(ims_conj+1)], dtype=np.int32)
+                    mps_tangent_conj = merge(mps_l_cano, mps_r_cano, ims_conj+1)
+                    environ = Environ(mps_tangent, mpo, mps_conj=mps_tangent_conj)
+                    ltensor = environ.GetLR("L", ims-1, mps_tangent, mpo, method="Enviro")
+                    rtensor = environ.GetLR("R", ims_conj+1, mps_tangent, mpo, method="Enviro")
+                    logger.info(f'{ims}, {ims_conj}')
                     import os
-                    cache_path = 'tdacache/tmp_{ims}_{ims_conj}.npy'
+                    cache_path = f'tdacache/tmp_{ims}_{ims_conj}.npy'
                     if os.path.exists(cache_path):
                         tmp = np.load(cache_path)
                     else:
-                        pos1_conj = np.sum([np.prod(xshape[i]) for i in range(ims_conj)], dtype=np.int32)
-                        pos2_conj = np.sum([np.prod(xshape[i]) for i in range(ims_conj+1)], dtype=np.int32)
-                        mps_tangent_conj = merge(mps_l_cano, mps_r_cano, ims_conj+1)
-                        environ = Environ(mps_tangent, mpo, mps_conj=mps_tangent_conj)
-                        ltensor = environ.GetLR("L", ims-1, mps_tangent, mpo, method="Enviro")
-                        rtensor = environ.GetLR("R", ims_conj+1, mps_tangent, mpo, method="Enviro")
-                        logger.info(f'{ims}, {ims_conj}')
                         if ims == ims_conj:
                             """
                             S-a   g i
@@ -363,6 +363,7 @@ class TDA(object):
                         Hmat[pos1:pos2, pos1_conj:pos2_conj] = tmp.T
 
             logger.info("Setting up Hamiltonian is complete")
+            self.Hmat = Hmat
             e, c = scipy.linalg.eigh(Hmat)
             self.nroots = nroots = xsize
 
@@ -431,6 +432,7 @@ class TDA(object):
             tda_coeff_list.append(reshape_x(c[:,iroot]))
 
         self.e = np.array(e)
+        self.c = np.array(c)
         self.wfn = [mps_l_cano, mps_r_cano, tangent_u, tda_coeff_list]
         return self.e
 
