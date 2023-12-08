@@ -323,8 +323,10 @@ class TDA(object):
                                             else:
                                                 shapes_dict[letter] = dim
                                     shape_output = [shapes_dict[letter] for letter in pattern_out]
+                                    size_output = np.prod(shape_output)
+                                    size_total = np.prod([shapes_dict[letter] for letter in shapes_dict])
                                     logger.info(f'inter {inter}')
-                                    logger.info(f'{shape_output} {np.log10(np.prod(shape_output))}')
+                                    logger.info(f'{shape_output} {np.log10(size_output)} {np.log10(size_total)}')
                                     #if print_size_only:
                                     #    tmp = xp.random.random(shape_output)
                                     #else:
