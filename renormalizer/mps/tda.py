@@ -15,6 +15,8 @@ from renormalizer.lib import davidson
 
 logger = logging.getLogger(__name__)
 print_size_only = False
+use_jax = False
+
 
 class TDA(object):
     r""" Tamm–Dancoff approximation (or called CIS) to calculate the excited
@@ -41,7 +43,7 @@ class TDA(object):
 
     """
 
-    def __init__(self, model, hmpo, mps, nroots=1, algo=None):
+    def __init__(self, model, hmpo, mps, nroots=1, algo=None, cache_dir=None):
 
         self.model = model
         self.hmpo = hmpo
@@ -60,6 +62,8 @@ class TDA(object):
         # wavefunction: [mps_l_cano, mps_r_cano, tangent_u, tda_coeff_list]
         self.wfn = None
         self.configs = defaultdict(list)
+        self.cache_dir = cache_dir
+        self.do_cache = (cache_dir is not None)
 
     def kernel(self, restart=False, include_psi0=False):
         r"""calculate the roots
@@ -151,6 +155,8 @@ class TDA(object):
             oe_backend = "cupy"
         else:
             oe_backend = "numpy"
+        if use_jax:
+            oe_backend = 'jax'
 
         mps_tangent = mps_r_cano.copy()
         environ = Environ(mps_tangent, mpo, "R")
@@ -252,6 +258,7 @@ class TDA(object):
         if algo == "direct":
             Hmat = np.zeros([xsize, xsize])
             for ims in range(site_num):
+                tmp_cache = (-1, None)
                 if tangent_u[ims] is None:
                     continue
                 pos1 = np.sum([np.prod(xshape[i]) for i in range(ims)], dtype=np.int32)
@@ -267,11 +274,14 @@ class TDA(object):
                     ltensor = environ.GetLR("L", ims-1, mps_tangent, mpo, method="Enviro")
                     rtensor = environ.GetLR("R", ims_conj+1, mps_tangent, mpo, method="Enviro")
                     logger.info(f'{ims}, {ims_conj}')
+
                     import os
-                    cache_path = f'tdacache/tmp_{ims}_{ims_conj}.npy'
-                    if os.path.exists(cache_path):
+                    if self.do_cache:
+                        cache_path = f'{self.cache_dir}/tmp_{ims}_{ims_conj}.npy'
+                    if self.do_cache and os.path.exists(cache_path):
                         tmp = np.load(cache_path)
                     else:
+                        tmp = ltensor
                         if ims == ims_conj:
                             """
                             S-a   g i
@@ -281,83 +291,63 @@ class TDA(object):
                             S-c-  h j
 
                             """
-                            a, b, c = ltensor.shape
-                            b, e, f, d = mpo[ims].shape
-                            c, f, h = tangent_u[ims].shape
-                            a, e, g = tangent_u[ims_conj].shape
-                            i, d, j = rtensor.shape
-                            tmpshape = (g, i, h, j)
-                            logger.info(f'{tmpshape} {np.log10(np.prod(tmpshape))}')
-                            if print_size_only:
-                                tmp = xp.random.random(tmpshape)
-                            else:
-                                tmp = oe.contract("abc, befd, cfh, aeg, idj-> gihj",
-                                        ltensor, asxp(mpo[ims]), asxp(tangent_u[ims]),
-                                        asxp(tangent_u[ims_conj]), rtensor, backend=oe_backend)
+                            inter = ims
+                            tmp = oe.contract("abc, befd, cfh, aeg, idj-> gihj",
+                                             tmp,
+                                             asxp(mpo[inter]),
+                                             asxp(tangent_u[inter]),
+                                             asxp(tangent_u[inter]),
+                                             rtensor,
+                                             backend=oe_backend)
                         else:
-                            a, b, c = ltensor.shape
-                            b, e, f, d = mpo[ims].shape
-                            c, f, h = tangent_u[ims].shape
-                            a, e, g = mps_tangent_conj[ims].shape
-                            tmpshape = (g, d, h)
-                            logger.info(f'{tmpshape} {np.log10(np.prod(tmpshape))}')
-                            if print_size_only:
-                                tmp = xp.random.random(tmpshape)
-                            else:
-                                tmp = oe.contract("abc, befd, cfh, aeg -> gdh",
-                                        ltensor, asxp(mpo[ims]), asxp(tangent_u[ims]),
-                                        asxp(mps_tangent_conj[ims]), backend=oe_backend)
-                            if ims+1 != ims_conj:
-                                tmp2 = mps_tangent_conj[ims+1]
-                            else:
-                                tmp2 = tangent_u[ims+1]
-
-                            a, b, c = tmp.shape
-                            b, e, f, d = mpo[ims + 1].shape
-                            x, f, h = mps_tangent[ims + 1].shape
-                            a, e, g = tmp2.shape
-                            tmpshape = (c, x, g, d, h)
-                            logger.info(f'{tmpshape} {np.log10(np.prod(tmpshape))}')
-                            if print_size_only:
-                                tmp = xp.random.random(tmpshape)
-                            else:
-                                tmp = oe.contract("abc, befd, xfh, aeg -> cxgdh",
-                                        tmp, asxp(mpo[ims+1]), asxp(mps_tangent[ims+1]), asxp(tmp2),
-                                        backend=oe_backend)
-
-                            for inter in range(ims+2, ims_conj+1):
-                                if inter != ims_conj:
-                                    tmp2 = mps_tangent_conj[inter]
+                            def update_tmp(tmp, inter, pattern, tangent):
+                                nonlocal tmp_cache
+                                tmp_cache_inter, tmp_cache_tensor = tmp_cache
+                                if tmp_cache_inter > inter:
+                                    tmp = None
+                                elif tmp_cache_inter == inter:
+                                    tmp = tmp_cache_tensor
                                 else:
-                                    tmp2 = tangent_u[ims_conj]
-                                logger.info(f'inter {inter}')
+                                    if inter != ims_conj:
+                                        tmp2 = mps_tangent_conj[inter]
+                                    else:
+                                        tmp2 = tangent_u[inter]
+                                    tensors = [tmp, asxp(mpo[inter]), asxp(tangent[inter]), asxp(tmp2)]
+                                    pattern_inputs, pattern_out = pattern.replace(' ', '').split('->')
+                                    pattern_inputs = pattern_inputs.split(',')
+                                    shapes_dict = {}
+                                    for pattern_input, tensor in zip(pattern_inputs, tensors):
+                                        for letter, dim in zip(list(pattern_input), tensor.shape):
+                                            if letter in shapes_dict:
+                                                assert shapes_dict[letter] == dim
+                                            else:
+                                                shapes_dict[letter] = dim
+                                    shape_output = [shapes_dict[letter] for letter in pattern_out]
+                                    logger.info(f'inter {inter}')
+                                    logger.info(f'{shape_output} {np.log10(np.prod(shape_output))}')
+                                    #if print_size_only:
+                                    #    tmp = xp.random.random(shape_output)
+                                    #else:
+                                    tmp = oe.contract(pattern, *tensors, backend=oe_backend)
+                                    logger.info(xp.sum(tmp))
+                                if inter == ims_conj - 1:
+                                    tmp_cache = (inter, tmp)
+                                return tmp
 
-                                x, y, a, b, c = tmp.shape
-                                b, e, f, d = mpo[inter].shape
-                                c, f, h = mps_tangent[inter].shape
-                                a, e, g = tmp2.shape
-                                tmpshape = (x, y, g, d, h)
-                                logger.info(f'{tmpshape} {np.log10(np.prod(tmpshape))}')
-                                if print_size_only:
-                                    tmp = xp.random.random(tmpshape)
-                                else:
-                                    tmp = oe.contract("xyabc, befd, cfh, aeg -> xygdh",
-                                            tmp, asxp(mpo[inter]),
-                                            asxp(mps_tangent[inter]),
-                                            asxp(tmp2),
-                                            backend=oe_backend)
+                            inter = ims
+                            tmp = update_tmp(tmp, inter, "abc, befd, cfh, aeg -> gdh", tangent_u)
 
-                            x, y, a, b, c = tmp.shape
-                            z, b, c = rtensor.shape
-                            tmpshape = (a, z, x, y)
-                            logger.info(f'{tmpshape} {np.log10(np.prod(tmpshape))}')
-                            if print_size_only:
-                                tmp = xp.random.random(tmpshape)
-                            else:
-                                tmp = oe.contract("xyabc, zbc->azxy", tmp, rtensor, backend=oe_backend)
+                            inter = ims + 1
+                            tmp = update_tmp(tmp, inter, "abc, befd, xfh, aeg -> cxgdh", mps_tangent)
+
+                            for inter in range(ims + 2, ims_conj + 1):
+                                tmp = update_tmp(tmp, inter, "xyabc, befd, cfh, aeg -> xygdh", mps_tangent)
+
+                            tmp = oe.contract("xyabc, zbc->azxy", tmp, rtensor, backend=oe_backend)
                         shape = (np.prod(tmp.shape[:2]), np.prod(tmp.shape[2:]))
                         tmp = asnumpy(tmp.reshape(shape))
-                        np.save(cache_path, tmp)
+                        if self.do_cache:
+                            np.save(cache_path, tmp)
                     Hmat[pos1_conj:pos2_conj, pos1:pos2] = tmp
                     if ims != ims_conj:
                         Hmat[pos1:pos2, pos1_conj:pos2_conj] = tmp.T
